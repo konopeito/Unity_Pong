@@ -1,27 +1,24 @@
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 
 public class BallMovement : MonoBehaviour
 {
-    public float speed = 5f;          // constant ball speed
+    public float speed = 5f;
     private Rigidbody2D rb;
 
     [Header("Audio")]
-    public AudioSource bounceAudio;    // assign in Inspector
+    public AudioSource bounceAudio;
 
     private GameManager gm;
 
     void Start()
     {
         rb = GetComponent<Rigidbody2D>();
-        gm = FindObjectOfType<GameManager>(); // reference GameManager for scoring
+        gm = FindObjectOfType<GameManager>();
         LaunchBall();
     }
 
-    void LaunchBall()
+    public void LaunchBall()
     {
-        // Random initial direction
         float x = Random.Range(0.5f, 1f) * (Random.value < 0.5f ? -1 : 1);
         float y = Random.Range(-0.5f, 0.5f);
 
@@ -30,19 +27,27 @@ public class BallMovement : MonoBehaviour
 
     void OnCollisionEnter2D(Collision2D collision)
     {
+        // Call OnHit() if object implements ICollidable
+        ICollidable collidable = collision.gameObject.GetComponent<ICollidable>();
+        if (collidable != null)
+        {
+            collidable.OnHit(collision);
+        }
+
         // Paddle bounce randomness
         if (collision.gameObject.CompareTag("Paddle"))
         {
             Vector2 velocity = rb.velocity;
-            velocity.y += Random.Range(-0.3f, 0.3f);   // slight randomness
+            velocity.y += Random.Range(-0.3f, 0.3f);
             rb.velocity = velocity.normalized * speed;
 
             PlayBounceSound();
         }
 
-        // Wall bounces (top/bottom)
+        // Wall bounce
         if (collision.gameObject.CompareTag("Wall"))
         {
+            rb.velocity = rb.velocity.normalized * speed;
             PlayBounceSound();
         }
     }
@@ -51,7 +56,6 @@ public class BallMovement : MonoBehaviour
     {
         if (collision.CompareTag("Goal"))
         {
-            // Notify GameManager for score and play score sound
             if (gm != null)
             {
                 if (collision.gameObject.name == "LeftGoal")
@@ -68,7 +72,7 @@ public class BallMovement : MonoBehaviour
     {
         if (bounceAudio != null)
         {
-            bounceAudio.pitch = Random.Range(0.9f, 1.1f); // small variation
+            bounceAudio.pitch = Random.Range(0.95f, 1.05f);
             bounceAudio.Play();
         }
     }
