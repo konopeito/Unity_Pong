@@ -1,8 +1,11 @@
+using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
+using Unity.Netcode;
 
-public class BallMovement : MonoBehaviour
+public class BallMovement : NetworkBehaviour
 {
-    public float speed = 5f;
+    public float speed = 5f;              // constant ball speed
     private Rigidbody2D rb;
 
     [Header("Audio")]
@@ -10,14 +13,21 @@ public class BallMovement : MonoBehaviour
 
     private GameManager gm;
 
-    void Start()
+    public override void OnNetworkSpawn()
     {
         rb = GetComponent<Rigidbody2D>();
         gm = FindObjectOfType<GameManager>();
-        LaunchBall();
+
+        // Only the server launches the ball
+        if (IsServer)
+        {
+            LaunchBallServerRpc();
+        }
     }
 
-    public void LaunchBall()
+    // ServerRpc to launch ball, only server controls initial velocity
+    [ServerRpc(RequireOwnership = false)]
+    void LaunchBallServerRpc()
     {
         float x = Random.Range(0.5f, 1f) * (Random.value < 0.5f ? -1 : 1);
         float y = Random.Range(-0.5f, 0.5f);
@@ -63,7 +73,14 @@ public class BallMovement : MonoBehaviour
                 else if (collision.gameObject.name == "RightGoal")
                     gm.ScorePoint("Left");
 
-                gm.PlayScoreSound();
+                // Play sound on all clients using ClientRpc
+                gm.PlayScoreSoundClientRpc();
+            }
+
+            // Only server resets the ball for the next round
+            if (IsServer)
+            {
+                gm.ResetBallServerRpc();
             }
         }
     }

@@ -3,8 +3,9 @@ using System.Collections.Generic;
 using UnityEngine;
 using TMPro; // TMP support
 using UnityEngine.UI; // For Button
+using Unity.Netcode;
 
-public class GameManager : MonoBehaviour
+public class GameManager : NetworkBehaviour
 {
     public int leftScore = 0;
     public int rightScore = 0;
@@ -41,15 +42,15 @@ public class GameManager : MonoBehaviour
 
     public void ScorePoint(string side)
     {
-        if (gameOver) return; // ignore scoring if game ended
+        if (!IsServer || gameOver) return; // Only server updates scores
 
         if (side == "Left") leftScore++;
         else if (side == "Right") rightScore++;
 
         UpdateScoreUI();
 
-        // Play score sound
-        PlayScoreSound();
+        // Play score sound on all clients
+        PlayScoreSoundClientRpc();
 
         // Check for winner
         if (leftScore >= winningScore)
@@ -62,7 +63,7 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            ResetBall();
+            ResetBallServerRpc();
         }
     }
 
@@ -71,30 +72,38 @@ public class GameManager : MonoBehaviour
         scoreText.text = leftScore + " - " + rightScore;
     }
 
-    void ResetBall()
+    // ServerRpc to reset ball on server, then sync to all clients
+    [ServerRpc(RequireOwnership = false)]
+    public void ResetBallServerRpc()
     {
-        ball.position = ballStartPos;
-        Rigidbody2D rb = ball.GetComponent<Rigidbody2D>();
-        rb.velocity = Vector2.zero;
+        if (ball == null) return;
 
-        // Relaunch the ball after a short delay
-        Invoke("LaunchBall", 1f);
+        Rigidbody2D rb = ball.GetComponent<Rigidbody2D>();
+        if (rb != null) rb.velocity = Vector2.zero;
+
+        ball.position = ballStartPos;
+
+        // Relaunch ball after short delay
+        Invoke(nameof(LaunchBallServerRpc), 1f);
     }
 
-    void LaunchBall()
+    [ServerRpc(RequireOwnership = false)]
+    void LaunchBallServerRpc()
     {
-        if (gameOver) return;
+        if (ball == null) return;
 
         Rigidbody2D rb = ball.GetComponent<Rigidbody2D>();
+        if (rb == null) return;
 
         // Random initial direction
         float x = Random.Range(0.5f, 1f) * (Random.value < 0.5f ? -1 : 1);
         float y = Random.Range(-0.5f, 0.5f);
 
-        rb.velocity = new Vector2(x, y).normalized * 5f; // consistent speed
+        rb.velocity = new Vector2(x, y).normalized * 5f;
     }
 
-    public void PlayScoreSound()
+    [ClientRpc]
+    public void PlayScoreSoundClientRpc()
     {
         if (scoreAudio != null)
         {
@@ -123,6 +132,8 @@ public class GameManager : MonoBehaviour
 
     void RestartGame()
     {
+        if (!IsServer) return; // Only server resets scores
+
         gameOver = false;
         leftScore = 0;
         rightScore = 0;
@@ -131,6 +142,6 @@ public class GameManager : MonoBehaviour
         if (winScreen != null)
             winScreen.SetActive(false);
 
-        ResetBall();
+        ResetBallServerRpc();
     }
 }
