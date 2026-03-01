@@ -7,7 +7,6 @@ using Unity.Netcode;
 
 public class GameManager : NetworkBehaviour
 {
-    // Networked scores — automatically sync to all clients
     public NetworkVariable<int> leftScore = new NetworkVariable<int>(0);
     public NetworkVariable<int> rightScore = new NetworkVariable<int>(0);
 
@@ -15,8 +14,13 @@ public class GameManager : NetworkBehaviour
     public Transform ball;
 
     [Header("Paddles")]
-    public NetworkObject leftPaddle;   // drag Left Paddle here
-    public NetworkObject rightPaddle;  // drag Right Paddle here
+    public NetworkObject leftPaddle;
+    public NetworkObject rightPaddle;
+
+    [Header("Renderers (for hiding before game starts)")]
+    public SpriteRenderer ballRenderer;
+    public SpriteRenderer leftPaddleRenderer;
+    public SpriteRenderer rightPaddleRenderer;
 
     [Header("Audio")]
     public AudioSource scoreAudio;
@@ -26,18 +30,26 @@ public class GameManager : NetworkBehaviour
     public TextMeshProUGUI winText;
     public Button restartButton;
 
+    [Header("UI Panels")]
+    public GameObject waitingPanel;
+    public GameObject gameUI;
+
     public int winningScore = 5;
     public float ballSpeed = 5f;
 
     private Vector2 ballStartPos;
     private bool gameOver = false;
+    private bool gameStarted = false;
 
     void Start()
     {
         ballStartPos = ball.position;
 
-        if (winScreen != null)
-            winScreen.SetActive(false);
+        if (winScreen != null) winScreen.SetActive(false);
+        if (gameUI != null) gameUI.SetActive(false);
+
+        SetGameObjectsVisible(false);
+        FreezeBall();
 
         if (restartButton != null)
             restartButton.onClick.AddListener(OnRestartButtonPressed);
@@ -45,13 +57,11 @@ public class GameManager : NetworkBehaviour
 
     public override void OnNetworkSpawn()
     {
-        // Listen for score changes on ALL clients
         leftScore.OnValueChanged += OnScoreChanged;
         rightScore.OnValueChanged += OnScoreChanged;
 
         UpdateScoreUI();
 
-        // Server listens for new players connecting
         if (IsServer)
         {
             NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
@@ -69,16 +79,46 @@ public class GameManager : NetworkBehaviour
         }
     }
 
-    // When a new client connects, give them ownership of the right paddle
     void OnClientConnected(ulong clientId)
     {
-        // Skip the host — host already owns the left paddle
         if (clientId == NetworkManager.Singleton.LocalClientId) return;
 
-        // Give the second player ownership of the right paddle
         if (rightPaddle != null)
         {
             rightPaddle.ChangeOwnership(clientId);
+        }
+
+        if (NetworkManager.Singleton.ConnectedClientsList.Count >= 2 && !gameStarted)
+        {
+            gameStarted = true;
+            StartGameClientRpc();
+        }
+    }
+
+    [ClientRpc]
+    void StartGameClientRpc()
+    {
+        gameStarted = true;
+
+        if (waitingPanel != null) waitingPanel.SetActive(false);
+        if (gameUI != null) gameUI.SetActive(true);
+
+        SetGameObjectsVisible(true);
+
+        // Unfreeze ball on server only
+        if (IsServer && ball != null)
+        {
+            Rigidbody2D rb = ball.GetComponent<Rigidbody2D>();
+            if (rb != null)
+            {
+                rb.simulated = true;
+                rb.isKinematic = false;
+            }
+        }
+
+        if (IsServer)
+        {
+            LaunchBall();
         }
     }
 
@@ -98,11 +138,11 @@ public class GameManager : NetworkBehaviour
 
         if (leftScore.Value >= winningScore)
         {
-            ShowWinScreenClientRpc("Player Left");
+            ShowWinScreenClientRpc("Player 1");
         }
         else if (rightScore.Value >= winningScore)
         {
-            ShowWinScreenClientRpc("Player Right");
+            ShowWinScreenClientRpc("Player 2");
         }
         else
         {
@@ -141,6 +181,29 @@ public class GameManager : NetworkBehaviour
         rb.velocity = new Vector2(x, y).normalized * ballSpeed;
     }
 
+    void SetGameObjectsVisible(bool visible)
+    {
+        Color show = Color.white;
+        Color hide = Color.clear;
+
+        if (ballRenderer != null) ballRenderer.color = visible ? show : hide;
+        if (leftPaddleRenderer != null) leftPaddleRenderer.color = visible ? show : hide;
+        if (rightPaddleRenderer != null) rightPaddleRenderer.color = visible ? show : hide;
+    }
+
+    void FreezeBall()
+    {
+        if (ball != null)
+        {
+            Rigidbody2D rb = ball.GetComponent<Rigidbody2D>();
+            if (rb != null)
+            {
+                rb.isKinematic = true;
+                rb.velocity = Vector2.zero;
+            }
+        }
+    }
+
     [ClientRpc]
     public void PlayScoreSoundClientRpc()
     {
@@ -156,11 +219,8 @@ public class GameManager : NetworkBehaviour
     {
         gameOver = true;
 
-        if (winScreen != null)
-            winScreen.SetActive(true);
-
-        if (winText != null)
-            winText.text = winner + " Wins!";
+        if (winScreen != null) winScreen.SetActive(true);
+        if (winText != null) winText.text = winner + " Wins!";
 
         if (ball != null)
         {
@@ -174,8 +234,7 @@ public class GameManager : NetworkBehaviour
     {
         gameOver = false;
 
-        if (winScreen != null)
-            winScreen.SetActive(false);
+        if (winScreen != null) winScreen.SetActive(false);
     }
 
     void OnRestartButtonPressed()
