@@ -1,27 +1,33 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using TMPro; // TMP support
-using UnityEngine.UI; // For Button
+using TMPro;
+using UnityEngine.UI;
 using Unity.Netcode;
 
 public class GameManager : NetworkBehaviour
 {
-    public int leftScore = 0;
-    public int rightScore = 0;
+    // Networked scores — automatically sync to all clients
+    public NetworkVariable<int> leftScore = new NetworkVariable<int>(0);
+    public NetworkVariable<int> rightScore = new NetworkVariable<int>(0);
 
-    public TextMeshProUGUI scoreText; // assign TMP Text in Inspector
-    public Transform ball;             // reference to ball to reset
+    public TextMeshProUGUI scoreText;
+    public Transform ball;
+
+    [Header("Paddles")]
+    public NetworkObject leftPaddle;   // drag Left Paddle here
+    public NetworkObject rightPaddle;  // drag Right Paddle here
 
     [Header("Audio")]
-    public AudioSource scoreAudio;     // assign score clip here
+    public AudioSource scoreAudio;
 
     [Header("Win Screen")]
-    public GameObject winScreen;       // assign WinScreen panel
-    public TextMeshProUGUI winText;    // TMP Text inside WinScreen
-    public Button restartButton;       // assign restart button
+    public GameObject winScreen;
+    public TextMeshProUGUI winText;
+    public Button restartButton;
 
     public int winningScore = 5;
+    public float ballSpeed = 5f;
 
     private Vector2 ballStartPos;
     private bool gameOver = false;
@@ -29,77 +35,110 @@ public class GameManager : NetworkBehaviour
     void Start()
     {
         ballStartPos = ball.position;
-        UpdateScoreUI();
 
-        // Hide win screen at start
         if (winScreen != null)
             winScreen.SetActive(false);
 
-        // Setup restart button
         if (restartButton != null)
-            restartButton.onClick.AddListener(RestartGame);
+            restartButton.onClick.AddListener(OnRestartButtonPressed);
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        // Listen for score changes on ALL clients
+        leftScore.OnValueChanged += OnScoreChanged;
+        rightScore.OnValueChanged += OnScoreChanged;
+
+        UpdateScoreUI();
+
+        // Server listens for new players connecting
+        if (IsServer)
+        {
+            NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
+        }
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        leftScore.OnValueChanged -= OnScoreChanged;
+        rightScore.OnValueChanged -= OnScoreChanged;
+
+        if (IsServer && NetworkManager.Singleton != null)
+        {
+            NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
+        }
+    }
+
+    // When a new client connects, give them ownership of the right paddle
+    void OnClientConnected(ulong clientId)
+    {
+        // Skip the host — host already owns the left paddle
+        if (clientId == NetworkManager.Singleton.LocalClientId) return;
+
+        // Give the second player ownership of the right paddle
+        if (rightPaddle != null)
+        {
+            rightPaddle.ChangeOwnership(clientId);
+        }
+    }
+
+    void OnScoreChanged(int oldValue, int newValue)
+    {
+        UpdateScoreUI();
     }
 
     public void ScorePoint(string side)
     {
-        if (!IsServer || gameOver) return; // Only server updates scores
+        if (!IsServer || gameOver) return;
 
-        if (side == "Left") leftScore++;
-        else if (side == "Right") rightScore++;
+        if (side == "Left") leftScore.Value++;
+        else if (side == "Right") rightScore.Value++;
 
-        UpdateScoreUI();
-
-        // Play score sound on all clients
         PlayScoreSoundClientRpc();
 
-        // Check for winner
-        if (leftScore >= winningScore)
+        if (leftScore.Value >= winningScore)
         {
-            ShowWinScreen("Player Left");
+            ShowWinScreenClientRpc("Player Left");
         }
-        else if (rightScore >= winningScore)
+        else if (rightScore.Value >= winningScore)
         {
-            ShowWinScreen("Player Right");
+            ShowWinScreenClientRpc("Player Right");
         }
         else
         {
-            ResetBallServerRpc();
+            ResetBall();
         }
     }
 
     void UpdateScoreUI()
     {
-        scoreText.text = leftScore + " - " + rightScore;
+        if (scoreText != null)
+            scoreText.text = leftScore.Value + " - " + rightScore.Value;
     }
 
-    // ServerRpc to reset ball on server, then sync to all clients
-    [ServerRpc(RequireOwnership = false)]
-    public void ResetBallServerRpc()
+    void ResetBall()
     {
-        if (ball == null) return;
+        if (!IsServer || ball == null) return;
 
         Rigidbody2D rb = ball.GetComponent<Rigidbody2D>();
         if (rb != null) rb.velocity = Vector2.zero;
 
         ball.position = ballStartPos;
 
-        // Relaunch ball after short delay
-        Invoke(nameof(LaunchBallServerRpc), 1f);
+        Invoke(nameof(LaunchBall), 1f);
     }
 
-    [ServerRpc(RequireOwnership = false)]
-    void LaunchBallServerRpc()
+    void LaunchBall()
     {
-        if (ball == null) return;
+        if (!IsServer || ball == null) return;
 
         Rigidbody2D rb = ball.GetComponent<Rigidbody2D>();
         if (rb == null) return;
 
-        // Random initial direction
         float x = Random.Range(0.5f, 1f) * (Random.value < 0.5f ? -1 : 1);
         float y = Random.Range(-0.5f, 0.5f);
 
-        rb.velocity = new Vector2(x, y).normalized * 5f;
+        rb.velocity = new Vector2(x, y).normalized * ballSpeed;
     }
 
     [ClientRpc]
@@ -112,7 +151,8 @@ public class GameManager : NetworkBehaviour
         }
     }
 
-    void ShowWinScreen(string winner)
+    [ClientRpc]
+    void ShowWinScreenClientRpc(string winner)
     {
         gameOver = true;
 
@@ -122,7 +162,6 @@ public class GameManager : NetworkBehaviour
         if (winText != null)
             winText.text = winner + " Wins!";
 
-        // Stop ball movement
         if (ball != null)
         {
             Rigidbody2D rb = ball.GetComponent<Rigidbody2D>();
@@ -130,18 +169,28 @@ public class GameManager : NetworkBehaviour
         }
     }
 
-    void RestartGame()
+    [ClientRpc]
+    void HideWinScreenClientRpc()
     {
-        if (!IsServer) return; // Only server resets scores
-
         gameOver = false;
-        leftScore = 0;
-        rightScore = 0;
-        UpdateScoreUI();
 
         if (winScreen != null)
             winScreen.SetActive(false);
+    }
 
-        ResetBallServerRpc();
+    void OnRestartButtonPressed()
+    {
+        RestartGameServerRpc();
+    }
+
+    [ServerRpc(RequireOwnership = false)]
+    void RestartGameServerRpc()
+    {
+        gameOver = false;
+        leftScore.Value = 0;
+        rightScore.Value = 0;
+
+        HideWinScreenClientRpc();
+        ResetBall();
     }
 }

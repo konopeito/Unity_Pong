@@ -21,13 +21,12 @@ public class BallMovement : NetworkBehaviour
         // Only the server launches the ball
         if (IsServer)
         {
-            LaunchBallServerRpc();
+            LaunchBall();
         }
     }
 
-    // ServerRpc to launch ball, only server controls initial velocity
-    [ServerRpc(RequireOwnership = false)]
-    void LaunchBallServerRpc()
+    // Server launches ball with random direction
+    void LaunchBall()
     {
         float x = Random.Range(0.5f, 1f) * (Random.value < 0.5f ? -1 : 1);
         float y = Random.Range(-0.5f, 0.5f);
@@ -37,6 +36,9 @@ public class BallMovement : NetworkBehaviour
 
     void OnCollisionEnter2D(Collision2D collision)
     {
+        // Only server handles physics/collision logic
+        if (!IsServer) return;
+
         // Call OnHit() if object implements ICollidable
         ICollidable collidable = collision.gameObject.GetComponent<ICollidable>();
         if (collidable != null)
@@ -51,41 +53,41 @@ public class BallMovement : NetworkBehaviour
             velocity.y += Random.Range(-0.3f, 0.3f);
             rb.velocity = velocity.normalized * speed;
 
-            PlayBounceSound();
+            // Play bounce sound on all clients
+            PlayBounceSoundClientRpc();
         }
 
         // Wall bounce
         if (collision.gameObject.CompareTag("Wall"))
         {
             rb.velocity = rb.velocity.normalized * speed;
-            PlayBounceSound();
+
+            // Play bounce sound on all clients
+            PlayBounceSoundClientRpc();
         }
     }
 
     void OnTriggerEnter2D(Collider2D collision)
     {
+        // Only server processes goals
+        if (!IsServer) return;
+
         if (collision.CompareTag("Goal"))
         {
             if (gm != null)
             {
+                // ScorePoint handles score update, sound, win check, and ball reset
                 if (collision.gameObject.name == "LeftGoal")
                     gm.ScorePoint("Right");
                 else if (collision.gameObject.name == "RightGoal")
                     gm.ScorePoint("Left");
-
-                // Play sound on all clients using ClientRpc
-                gm.PlayScoreSoundClientRpc();
-            }
-
-            // Only server resets the ball for the next round
-            if (IsServer)
-            {
-                gm.ResetBallServerRpc();
             }
         }
     }
 
-    private void PlayBounceSound()
+    // ClientRpc to play bounce sound on all clients
+    [ClientRpc]
+    void PlayBounceSoundClientRpc()
     {
         if (bounceAudio != null)
         {
